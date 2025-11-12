@@ -1,0 +1,24 @@
+# Build outputs
+build/*.vvp
+build/*.vcd
+*.vvp
+*.vcd
+
+# LaTeX build artifacts
+*.aux
+*.log
+*.out
+*.toc
+*.pdf
+*.synctex.gz
+*.fdb_latexmk
+*.fls
+
+# Editor backups
+*~
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
