@@ -1,0 +1,266 @@
+\documentclass[10pt,landscape]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{tikz}
+\usepackage{multicol}
+\usepackage{geometry}
+\usepackage{tcolorbox}
+\usepackage{xcolor}
+
+\geometry{margin=0.5in}
+\setlength{\columnsep}{1cm}
+\pagestyle{empty}
+
+\begin{document}
+
+\begin{center}
+\Huge\textbf{Asynchronous FIFO - Quick Reference}\\
+\large Key Equations \& Diagrams
+\end{center}
+
+\begin{multicols}{2}
+
+%==============================================================================
+\section*{Gray Code Conversion}
+%==============================================================================
+
+\begin{tcolorbox}[colback=blue!5,colframe=blue!75!black,title=Binary to Gray]
+\begin{equation*}
+\boxed{Gray = (Binary \gg 1) \oplus Binary}
+\end{equation*}
+
+Bit-by-bit:
+\begin{equation*}
+G[i] = B[i] \oplus B[i+1]
+\end{equation*}
+\end{tcolorbox}
+
+\begin{tcolorbox}[colback=blue!5,colframe=blue!75!black,title=Gray to Binary]
+\begin{equation*}
+\boxed{B[i] = B[i+1] \oplus G[i]}
+\end{equation*}
+
+From MSB down:
+\begin{align*}
+B[n] &= G[n] \\
+B[n-1] &= B[n] \oplus G[n-1] \\
+B[i] &= B[i+1] \oplus G[i]
+\end{align*}
+\end{tcolorbox}
+
+%==============================================================================
+\section*{Pointer Management}
+%==============================================================================
+
+\begin{tcolorbox}[colback=green!5,colframe=green!75!black,title=Pointer Structure]
+For $2^n$ word FIFO, use $(n+1)$ bit pointers:
+
+\begin{equation*}
+\text{Pointer} = \underbrace{MSB}_{\text{Wrap}} | \underbrace{b_{n-1} \cdots b_0}_{\text{Address $n$ bits}}
+\end{equation*}
+\end{tcolorbox}
+
+\begin{tcolorbox}[colback=green!5,colframe=green!75!black,title=Pointer Increment]
+Write pointer:
+\begin{equation*}
+wbin_{next} = wbin + (winc \land \neg wfull)
+\end{equation*}
+
+Read pointer:
+\begin{equation*}
+rbin_{next} = rbin + (rinc \land \neg rempty)
+\end{equation*}
+
+Then convert to Gray:
+\begin{equation*}
+gray_{next} = (bin_{next} \gg 1) \oplus bin_{next}
+\end{equation*}
+\end{tcolorbox}
+
+%==============================================================================
+\section*{Full and Empty Detection}
+%==============================================================================
+
+\begin{tcolorbox}[colback=red!5,colframe=red!75!black,title=Empty Condition]
+\begin{equation*}
+\boxed{empty = (rptr_{gray} = wptr_{sync})}
+\end{equation*}
+
+All bits must be equal, including MSB.
+\end{tcolorbox}
+
+\begin{tcolorbox}[colback=red!5,colframe=red!75!black,title=Full Condition]
+\begin{equation*}
+\boxed{full = (wptr = \{\neg rptr_{sync}[n:n-1], rptr_{sync}[n-2:0]\})}
+\end{equation*}
+
+Three conditions:
+\begin{align*}
+wptr[n] &\neq rptr_{sync}[n] \quad \text{(MSB diff)} \\
+wptr[n-1] &\neq rptr_{sync}[n-1] \quad \text{(2nd MSB diff)} \\
+wptr[n-2:0] &= rptr_{sync}[n-2:0] \quad \text{(Rest equal)}
+\end{align*}
+\end{tcolorbox}
+
+%==============================================================================
+\section*{Synchronizer Design}
+%==============================================================================
+
+\begin{tcolorbox}[colback=orange!5,colframe=orange!75!black,title=Two-Stage Synchronizer]
+\begin{equation*}
+\text{async\_sig} \xrightarrow{clk} stage1 \xrightarrow{clk} stage2 \text{ (stable)}
+\end{equation*}
+
+MTBF for two stages:
+\begin{equation*}
+MTBF_2 \approx \frac{(MTBF_1)^2}{f_{clk}} \gg 10^{15} \text{ years}
+\end{equation*}
+\end{tcolorbox}
+
+%==============================================================================
+\section*{Memory Addressing}
+%==============================================================================
+
+\begin{tcolorbox}[colback=purple!5,colframe=purple!75!black,title=Address Extraction]
+Extract lower $n$ bits from $(n+1)$-bit pointer:
+
+\begin{equation*}
+addr = pointer[n-1:0]
+\end{equation*}
+
+Example for 16-word FIFO:
+\begin{equation*}
+wbin = 0\_1010 \Rightarrow waddr = 1010
+\end{equation*}
+\end{tcolorbox}
+
+\columnbreak
+
+%==============================================================================
+\section*{Key Design Rules}
+%==============================================================================
+
+\begin{tcolorbox}[colback=yellow!10,colframe=black,title=\textbf{MUST Follow}]
+\begin{enumerate}
+    \item \textbf{Always use Gray code} for CDC
+    \item \textbf{Two-stage synchronizers} minimum
+    \item \textbf{$(n+1)$ bits} for $2^n$ depth
+    \item \textbf{Invert top 2 MSBs} for full check
+    \item \textbf{All outputs registered}
+    \item \textbf{Separate clock domains}
+\end{enumerate}
+\end{tcolorbox}
+
+%==============================================================================
+\section*{Complete Write Cycle}
+%==============================================================================
+
+\begin{align*}
+\text{1. Binary increment:} \quad & wbin_{new} = wbin + 1 \\
+\text{2. Convert to Gray:} \quad & wgray = (wbin_{new} \gg 1) \oplus wbin_{new} \\
+\text{3. Memory address:} \quad & waddr = wbin_{new}[n-1:0] \\
+\text{4. Write memory:} \quad & mem[waddr] \leftarrow wdata \\
+\text{5. Sync to read domain:} \quad & wptr \xrightarrow{sync} rq2\_wptr \\
+\text{6. Update empty:} \quad & empty = (rptr = rq2\_wptr)
+\end{align*}
+
+%==============================================================================
+\section*{Complete Read Cycle}
+%==============================================================================
+
+\begin{align*}
+\text{1. Memory read:} \quad & rdata = mem[raddr] \\
+\text{2. Binary increment:} \quad & rbin_{new} = rbin + 1 \\
+\text{3. Convert to Gray:} \quad & rgray = (rbin_{new} \gg 1) \oplus rbin_{new} \\
+\text{4. Memory address:} \quad & raddr = rbin_{new}[n-1:0] \\
+\text{5. Sync to write domain:} \quad & rptr \xrightarrow{sync} wq2\_rptr \\
+\text{6. Update full:} \quad & full = (wptr = \{\neg wq2\_rptr[n:n-1], wq2\_rptr[n-2:0]\})
+\end{align*}
+
+%==============================================================================
+\section*{Timing Constraints}
+%==============================================================================
+
+\begin{tcolorbox}[colback=gray!10,colframe=black,title=CDC False Paths]
+Set false paths on synchronizer inputs:
+
+\begin{verbatim}
+set_false_path -from [get_pins
+  sync_r2w/wq1_rptr*/Q]
+set_false_path -from [get_pins
+  sync_w2r/rq1_wptr*/Q]
+\end{verbatim}
+\end{tcolorbox}
+
+%==============================================================================
+\section*{Example: 16-Word FIFO}
+%==============================================================================
+
+\textbf{Parameters:}
+\begin{itemize}
+    \item Memory depth: $2^4 = 16$ words
+    \item Address bits: 4
+    \item Pointer bits: $4 + 1 = 5$
+\end{itemize}
+
+\textbf{Empty State:}
+\begin{equation*}
+wptr = 0\_0000, \quad rptr = 0\_0000
+\end{equation*}
+
+\textbf{Full State (after 16 writes):}
+\begin{align*}
+wbin &= 1\_0000 \text{ (wrapped)} \\
+wptr &= 1\_1000 \text{ (Gray 16)} \\
+rbin &= 0\_0000 \\
+rptr &= 0\_0000 \text{ (Gray 0)}
+\end{align*}
+
+Check full:
+\begin{align*}
+\{\neg 0\_0000[4:3], 0\_0000[2:0]\} &= \{11, 000\} \\
+&= 1\_1000 \\
+&= wptr \quad \checkmark \text{ FULL!}
+\end{align*}
+
+%==============================================================================
+\section*{Common Mistakes to Avoid}
+%==============================================================================
+
+\begin{tcolorbox}[colback=red!10,colframe=red!75!black,title=\textbf{NEVER DO THIS}]
+\begin{enumerate}
+    \item \textcolor{red}{\textbf{Binary pointers without handshake}}
+    \item \textcolor{red}{\textbf{Single-stage synchronizer}}
+    \item \textcolor{red}{\textbf{Compare without MSB check}}
+    \item \textcolor{red}{\textbf{$n$-bit pointers for $2^n$ depth}}
+    \item \textcolor{red}{\textbf{Mixing clock domains}}
+\end{enumerate}
+\end{tcolorbox}
+
+%==============================================================================
+\section*{Quick Verification Checklist}
+%==============================================================================
+
+$\square$ Empty after reset\\
+$\square$ Single word write/read\\
+$\square$ Fill FIFO ($2^n$ writes)\\
+$\square$ Empty FIFO ($2^n$ reads)\\
+$\square$ Full flag asserts correctly\\
+$\square$ Empty flag asserts correctly\\
+$\square$ Concurrent operations\\
+$\square$ Different clock frequencies\\
+$\square$ Pointer wrap-around\\
+$\square$ No data corruption
+
+\end{multicols}
+
+\vfill
+
+\begin{center}
+\fbox{\parbox{0.95\textwidth}{
+\textbf{Bottom Line:} Use Gray code for CDC, two-stage synchronizers, $(n+1)$-bit pointers for $2^n$ depth, invert top 2 MSBs for full detection. Follow Cummings methodology!
+}}
+\end{center}
+
+\end{document}

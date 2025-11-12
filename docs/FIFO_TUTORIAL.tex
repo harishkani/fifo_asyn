@@ -1,0 +1,695 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{tikz}
+\usepackage{circuitikz}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{geometry}
+\usepackage{fancyhdr}
+\usepackage{tcolorbox}
+
+\geometry{margin=1in}
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{Asynchronous FIFO Design}
+\lhead{From First Principles}
+\cfoot{\thepage}
+
+% Code listing style
+\lstdefinestyle{verilog}{
+    language=Verilog,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue}\bfseries,
+    commentstyle=\color{green!60!black},
+    stringstyle=\color{red},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    stepnumber=1,
+    numbersep=5pt,
+    backgroundcolor=\color{gray!10},
+    showspaces=false,
+    showstringspaces=false,
+    showtabs=false,
+    frame=single,
+    tabsize=2,
+    captionpos=b,
+    breaklines=true,
+    breakatwhitespace=false
+}
+
+\lstset{style=verilog}
+
+\title{\Huge\textbf{Complete Asynchronous FIFO Tutorial}\\
+\Large From First Principles to Working Implementation}
+\author{Based on Clifford Cummings SNUG 2002}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+
+%==============================================================================
+\section{Introduction to FIFOs}
+%==============================================================================
+
+\subsection{Basic Concept}
+
+A \textbf{FIFO} (First-In, First-Out) is a data structure where the first data written is the first data read. It operates like a queue:
+
+\begin{equation}
+\text{Output Order} = \text{Input Order}
+\end{equation}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[scale=0.8]
+    % FIFO buffer
+    \draw[thick] (0,0) rectangle (8,2);
+    \foreach \x in {0,1.6,3.2,4.8,6.4,8} {
+        \draw[thick] (\x,0) -- (\x,2);
+    }
+
+    % Data labels
+    \node at (0.8,1) {\Large A};
+    \node at (2.4,1) {\Large B};
+    \node at (4.0,1) {\Large C};
+    \node at (5.6,1) {\Large D};
+    \node at (7.2,1) {\Large E};
+
+    % Arrows
+    \draw[->,ultra thick,blue] (-1.5,1) -- (0,1) node[midway,above] {Write};
+    \draw[->,ultra thick,red] (8,1) -- (9.5,1) node[midway,above] {Read};
+
+    % Labels
+    \node[below] at (4,-0.5) {\textbf{FIFO Buffer}};
+\end{tikzpicture}
+\caption{FIFO conceptual diagram}
+\end{figure}
+
+\subsection{FIFO Operations}
+
+\subsubsection{Write Operation}
+
+Writing data into FIFO:
+
+\begin{align}
+\text{FIFO}[w\_ptr] &\leftarrow \text{write\_data} \\
+w\_ptr &\leftarrow w\_ptr + 1
+\end{align}
+
+\subsubsection{Read Operation}
+
+Reading data from FIFO:
+
+\begin{align}
+\text{read\_data} &\leftarrow \text{FIFO}[r\_ptr] \\
+r\_ptr &\leftarrow r\_ptr + 1
+\end{align}
+
+%==============================================================================
+\section{Clock Domain Crossing Problem}
+%==============================================================================
+
+\subsection{The Metastability Problem}
+
+When a signal transitions near a clock edge, metastability can occur:
+
+\begin{tcolorbox}[colback=red!5!white,colframe=red!75!black,title=Metastability]
+A flip-flop in metastability has output voltage between logic 0 and logic 1, potentially causing:
+\begin{itemize}
+    \item Incorrect logic value
+    \item Oscillations
+    \item Propagation of unknown state
+\end{itemize}
+\end{tcolorbox}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[scale=1]
+    % Clock signal
+    \draw[thick] (0,0) -- (1,0) -- (1,1) -- (2,1) -- (2,0) -- (3,0) -- (3,1) -- (4,1) -- (4,0) -- (5,0);
+    \node[left] at (0,0.5) {CLK};
+
+    % Data signal
+    \draw[thick,blue] (0,-1.5) -- (2.5,-1.5);
+    \draw[thick,red] (2.5,-0.5) -- (5,-0.5);
+    \draw[thick,dashed,orange] (2.5,-1.5) -- (2.5,-0.5);
+    \node[left] at (0,-1) {DATA};
+
+    % Danger zone
+    \draw[red,dashed,thick] (2.3,-2) rectangle (2.7,1.5);
+    \node[red,below] at (2.5,-2) {\small Metastability Zone};
+
+    \draw[<->,thick] (2.5,1.2) -- (3,1.2) node[midway,above] {\tiny Setup};
+\end{tikzpicture}
+\caption{Metastability occurs when data changes near clock edge}
+\end{figure}
+
+\subsection{Binary Counter Problem}
+
+Multiple bits changing simultaneously in binary counting:
+
+\begin{equation}
+7_{10} \rightarrow 8_{10} \quad \Rightarrow \quad 0111_2 \rightarrow 1000_2
+\end{equation}
+
+All 4 bits change! If sampled during transition:
+
+\begin{align}
+\text{Possible Values} = \{0111_2, 0110_2, 0100_2, 1100_2, 1000_2, \ldots\}
+\end{align}
+
+This is \textbf{dangerous} for clock domain crossing!
+
+%==============================================================================
+\section{Gray Code Solution}
+%==============================================================================
+
+\subsection{Gray Code Definition}
+
+\textbf{Gray code} ensures only one bit changes between consecutive values:
+
+\begin{equation}
+\text{Hamming Distance}(G_n, G_{n+1}) = 1 \quad \forall n
+\end{equation}
+
+\subsection{Binary to Gray Conversion}
+
+The conversion formula:
+
+\begin{equation}
+\boxed{G[i] = B[i] \oplus B[i+1]}
+\end{equation}
+
+Or in compact form:
+
+\begin{equation}
+\boxed{Gray = (Binary \gg 1) \oplus Binary}
+\end{equation}
+
+\textbf{Example:} Convert binary 6 to Gray:
+
+\begin{align}
+Binary &= 0110_2 \\
+Binary \gg 1 &= 0011_2 \\
+Gray &= 0110_2 \oplus 0011_2 = 0101_2
+\end{align}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|c|c|c|c|}
+\hline
+\textbf{Decimal} & \textbf{Binary} & \textbf{Gray} & \textbf{Bits Changed} \\
+\hline
+0 & 0000 & 0000 & - \\
+1 & 0001 & 0001 & 1 \\
+2 & 0010 & 0011 & 1 \\
+3 & 0011 & 0010 & 1 \\
+4 & 0100 & 0110 & 1 \\
+5 & 0101 & 0111 & 1 \\
+6 & 0110 & 0101 & 1 \\
+7 & 0111 & 0100 & 1 \\
+8 & 1000 & 1100 & \textbf{1} $\checkmark$ \\
+\hline
+\end{tabular}
+\caption{Binary vs Gray Code Comparison}
+\end{table}
+
+\subsection{Gray to Binary Conversion}
+
+\begin{equation}
+\boxed{B[i] = B[i+1] \oplus G[i]}
+\end{equation}
+
+Starting from MSB:
+
+\begin{align}
+B[n] &= G[n] \\
+B[n-1] &= B[n] \oplus G[n-1] \\
+B[n-2] &= B[n-1] \oplus G[n-2] \\
+&\vdots
+\end{align}
+
+%==============================================================================
+\section{Pointer Management}
+%==============================================================================
+
+\subsection{Why Extra MSB?}
+
+For a FIFO with $2^n$ depth, we use $(n+1)$-bit pointers:
+
+\begin{equation}
+\text{Pointer} = \underbrace{MSB}_{\text{Wrap flag}} \mid \underbrace{b_{n-1} \ldots b_0}_{\text{Address}}
+\end{equation}
+
+\textbf{Purpose:} Distinguish between full and empty conditions.
+
+\subsection{Pointer States}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|c|c|c|}
+\hline
+\textbf{Condition} & \textbf{Write Pointer} & \textbf{Read Pointer} \\
+\hline
+Empty & $0\_0000$ & $0\_0000$ \\
+Partial & $0\_0101$ & $0\_0011$ \\
+Full & $1\_0000$ & $0\_0000$ \\
+\hline
+\end{tabular}
+\caption{Pointer states for 16-word FIFO}
+\end{table}
+
+\subsection{Gray Code Pointer Equations}
+
+Binary increment:
+
+\begin{equation}
+bin_{next} = bin + (inc \land \neg full/empty)
+\end{equation}
+
+Convert to Gray:
+
+\begin{equation}
+gray_{next} = (bin_{next} \gg 1) \oplus bin_{next}
+\end{equation}
+
+%==============================================================================
+\section{Full and Empty Detection}
+%==============================================================================
+
+\subsection{Empty Condition}
+
+FIFO is empty when read pointer equals synchronized write pointer:
+
+\begin{equation}
+\boxed{empty = (rptr_{gray} = wptr_{gray\_sync})}
+\end{equation}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}
+    % Comparator
+    \draw[thick] (0,0) rectangle (3,2);
+    \node at (1.5,1) {$=$};
+
+    % Inputs
+    \draw[<-,thick] (0,1.5) -- (-2,1.5) node[left] {$rptr_{gray}$};
+    \draw[<-,thick] (0,0.5) -- (-2,0.5) node[left] {$wptr_{sync}$};
+
+    % Output
+    \draw[->,thick] (3,1) -- (5,1) node[right] {$empty$};
+\end{tikzpicture}
+\caption{Empty detection logic}
+\end{figure}
+
+\subsection{Full Condition}
+
+FIFO is full when three conditions are met:
+
+\begin{align}
+wptr[n] &\neq rptr_{sync}[n] \quad \text{(MSBs different)} \\
+wptr[n-1] &\neq rptr_{sync}[n-1] \quad \text{(2nd MSBs different)} \\
+wptr[n-2:0] &= rptr_{sync}[n-2:0] \quad \text{(Lower bits equal)}
+\end{align}
+
+Simplified:
+
+\begin{equation}
+\boxed{full = (wptr_{gray} = \{\neg rptr_{sync}[n:n-1], rptr_{sync}[n-2:0]\})}
+\end{equation}
+
+\subsection{Why Invert Top 2 MSBs?}
+
+Due to Gray code symmetry, the lower $(n-1)$ bits repeat in the second half of the sequence. Inverting the top 2 MSBs compensates for this:
+
+\begin{align}
+\text{Write wrapped once:} \quad wptr[n] &= 1, \quad rptr[n] = 0 \\
+\text{Same location:} \quad wptr[n-2:0] &= rptr[n-2:0] \\
+\text{Gray compensation:} \quad wptr[n-1] &\neq rptr[n-1]
+\end{align}
+
+%==============================================================================
+\section{Synchronizer Design}
+%==============================================================================
+
+\subsection{Two-Stage Synchronizer}
+
+\begin{figure}[h]
+\centering
+\begin{circuitikz}[scale=0.8]
+    % Input
+    \node[left] at (0,2) {$rptr$ (async)};
+    \draw (0,2) -- (1,2);
+
+    % First FF
+    \draw[thick] (1,1) rectangle (3,3);
+    \node at (2,2.5) {D};
+    \node at (2,1.5) {Q};
+    \draw (2,1) -- (2,0.5) node[below] {$wclk$};
+    \draw[->] (3,2) -- (4,2);
+    \node[above] at (3.5,2) {$wq1\_rptr$};
+
+    % Second FF
+    \draw[thick] (5,1) rectangle (7,3);
+    \node at (6,2.5) {D};
+    \node at (6,1.5) {Q};
+    \draw (6,1) -- (6,0.5) node[below] {$wclk$};
+    \draw[->] (7,2) -- (8,2);
+    \node[above] at (7.5,2) {$wq2\_rptr$};
+
+    % Output
+    \node[right] at (8,2) {(stable)};
+\end{circuitikz}
+\caption{Two-stage synchronizer architecture}
+\end{figure}
+
+\subsection{MTBF Analysis}
+
+Mean Time Between Failures for single stage:
+
+\begin{equation}
+MTBF_1 = \frac{e^{T_r/\tau}}{f_{clk} \times f_{data} \times \tau}
+\end{equation}
+
+For two stages:
+
+\begin{equation}
+MTBF_2 \approx \frac{(MTBF_1)^2}{f_{clk}} \gg 10^{15} \text{ years}
+\end{equation}
+
+Where:
+\begin{itemize}
+    \item $T_r$ = Resolution time of flip-flop
+    \item $\tau$ = Time constant
+    \item $f_{clk}$ = Clock frequency
+    \item $f_{data}$ = Data change frequency
+\end{itemize}
+
+%==============================================================================
+\section{Complete FIFO Architecture}
+%==============================================================================
+
+\subsection{Block Diagram}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[scale=0.7]
+    % Write domain
+    \draw[thick,blue!50,fill=blue!10] (0,5) rectangle (4,8);
+    \node at (2,7.5) {\textbf{Write Domain}};
+    \node at (2,7) {\small $wptr\_full$};
+    \node at (2,6.5) {\small $wclk$};
+
+    % Read domain
+    \draw[thick,red!50,fill=red!10] (10,5) rectangle (14,8);
+    \node at (12,7.5) {\textbf{Read Domain}};
+    \node at (12,7) {\small $rptr\_empty$};
+    \node at (12,6.5) {\small $rclk$};
+
+    % Memory
+    \draw[thick,green!50,fill=green!10] (5,3) rectangle (9,4.5);
+    \node at (7,3.75) {\textbf{FIFO Memory}};
+
+    % Synchronizers
+    \draw[thick,orange!50,fill=orange!10] (4.5,0) rectangle (7,1.5);
+    \node at (5.75,0.75) {\tiny $sync\_w2r$};
+
+    \draw[thick,orange!50,fill=orange!10] (7.5,0) rectangle (9.5,1.5);
+    \node at (8.5,0.75) {\tiny $sync\_r2w$};
+
+    % Connections
+    \draw[->,thick] (2,5) -- (2,4) -- (5,4);
+    \draw[->,thick] (12,5) -- (12,4) -- (9,4);
+    \draw[->,thick,blue] (2,5) -- (2,2) -- (5.75,2) -- (5.75,1.5);
+    \draw[->,thick,red] (12,5) -- (12,2) -- (8.5,2) -- (8.5,1.5);
+    \draw[->,thick,orange] (5.75,0) -- (5.75,-0.5) -- (12,-0.5) -- (12,5);
+    \draw[->,thick,orange] (8.5,0) -- (8.5,-1) -- (2,-1) -- (2,5);
+\end{tikzpicture}
+\caption{Complete asynchronous FIFO architecture}
+\end{figure}
+
+\subsection{Data Flow Equations}
+
+Write path:
+
+\begin{align}
+wbin_{next} &= wbin + (winc \land \neg wfull) \\
+wgray_{next} &= (wbin_{next} \gg 1) \oplus wbin_{next} \\
+waddr &= wbin[n-1:0] \\
+mem[waddr] &\leftarrow wdata
+\end{align}
+
+Read path:
+
+\begin{align}
+rbin_{next} &= rbin + (rinc \land \neg rempty) \\
+rgray_{next} &= (rbin_{next} \gg 1) \oplus rbin_{next} \\
+raddr &= rbin[n-1:0] \\
+rdata &\leftarrow mem[raddr]
+\end{align}
+
+%==============================================================================
+\section{Verilog Implementation}
+%==============================================================================
+
+\subsection{Gray Code Counter}
+
+\begin{lstlisting}[caption=Gray Code Counter - Style \#2]
+// Dual pointer system
+always @(posedge clk or negedge rst_n) begin
+    if (!rst_n)
+        {bin_ptr, gray_ptr} <= 0;
+    else
+        {bin_ptr, gray_ptr} <= {bin_next, gray_next};
+end
+
+// Binary increment
+assign bin_next = bin_ptr + (inc & ~full);
+
+// Binary to Gray conversion
+assign gray_next = (bin_next >> 1) ^ bin_next;
+
+// Use binary for addressing
+assign addr = bin_ptr[ADDRSIZE-1:0];
+\end{lstlisting}
+
+\subsection{Empty Detection}
+
+\begin{lstlisting}[caption=Empty Detection Logic]
+// Compare next Gray code with synchronized write pointer
+assign rempty_val = (rgraynext == rq2_wptr);
+
+// Register empty flag
+always @(posedge rclk or negedge rrst_n) begin
+    if (!rrst_n)
+        rempty <= 1'b1;  // Empty on reset
+    else
+        rempty <= rempty_val;
+end
+\end{lstlisting}
+
+\subsection{Full Detection}
+
+\begin{lstlisting}[caption=Full Detection Logic]
+// Full when next write pointer equals inverted-MSB read pointer
+assign wfull_val = (wgraynext == {~wq2_rptr[ADDRSIZE:ADDRSIZE-1],
+                                   wq2_rptr[ADDRSIZE-2:0]});
+
+// Register full flag
+always @(posedge wclk or negedge wrst_n) begin
+    if (!wrst_n)
+        wfull <= 1'b0;  // Not full on reset
+    else
+        wfull <= wfull_val;
+end
+\end{lstlisting}
+
+\subsection{Synchronizer}
+
+\begin{lstlisting}[caption=Two-Stage Synchronizer]
+// Two flip-flop synchronizer chain
+always @(posedge wclk or negedge wrst_n) begin
+    if (!wrst_n)
+        {wq2_rptr, wq1_rptr} <= 0;
+    else
+        {wq2_rptr, wq1_rptr} <= {wq1_rptr, rptr};
+end
+\end{lstlisting}
+
+%==============================================================================
+\section{Timing Analysis}
+%==============================================================================
+
+\subsection{Latency Components}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|l|c|}
+\hline
+\textbf{Operation} & \textbf{Latency} \\
+\hline
+Write to Memory & 1 $wclk$ \\
+Memory Read & Async (0 clocks) \\
+Pointer Sync (CDC) & 2 dest clocks \\
+Empty Flag Update & 1 $rclk$ + 2 $rclk$ \\
+Full Flag Update & 1 $wclk$ + 2 $wclk$ \\
+\hline
+\end{tabular}
+\caption{FIFO latency components}
+\end{table}
+
+\subsection{Flag Removal Delay}
+
+Pessimistic flag removal delay:
+
+\begin{equation}
+T_{flag\_removal} = T_{sync\_stages} + T_{comparison} = 2T_{clk} + T_{comb}
+\end{equation}
+
+This is acceptable because:
+\begin{itemize}
+    \item Prevents overflow/underflow (critical)
+    \item Small performance impact
+    \item Safer than optimistic removal
+\end{itemize}
+
+%==============================================================================
+\section{Verification Strategy}
+%==============================================================================
+
+\subsection{Key Test Cases}
+
+\begin{enumerate}
+    \item \textbf{Reset Test}: Verify empty after reset
+    \item \textbf{Single Word}: Write one, read one
+    \item \textbf{Fill FIFO}: Write $2^n$ words, check full
+    \item \textbf{Empty FIFO}: Read all words, check empty
+    \item \textbf{Wrap-around}: Test pointer wrap behavior
+    \item \textbf{Concurrent R/W}: Different clock frequencies
+    \item \textbf{Stress Test}: Random operations
+\end{enumerate}
+
+\subsection{Coverage Goals}
+
+\begin{align}
+\text{Toggle Coverage} &\geq 95\% \\
+\text{Code Coverage} &\geq 98\% \\
+\text{FSM Coverage} &= 100\% \\
+\text{CDC Checks} &= 100\%
+\end{align}
+
+%==============================================================================
+\section{Synthesis Considerations}
+%==============================================================================
+
+\subsection{False Paths}
+
+Set false paths on synchronizer inputs:
+
+\begin{verbatim}
+set_false_path -from [get_pins sync_r2w/wq1_rptr*/Q]
+set_false_path -from [get_pins sync_w2r/rq1_wptr*/Q]
+\end{verbatim}
+
+\subsection{Clock Domain Crossing}
+
+All CDC paths go through synchronizers:
+
+\begin{equation}
+\text{CDC Paths} = \{wptr \rightarrow rclk, rptr \rightarrow wclk\}
+\end{equation}
+
+Only these paths cross domains!
+
+%==============================================================================
+\section{Conclusion}
+%==============================================================================
+
+\subsection{Key Takeaways}
+
+\begin{tcolorbox}[colback=green!5!white,colframe=green!75!black]
+\begin{enumerate}
+    \item Gray code is \textbf{essential} for safe CDC
+    \item Two-stage synchronizers prevent metastability
+    \item $(n+1)$-bit pointers distinguish full from empty
+    \item MSB inversion handles Gray code symmetry
+    \item Pessimistic flag removal is acceptable
+    \item Modular design aids synthesis and verification
+\end{enumerate}
+\end{tcolorbox}
+
+\subsection{Design Quality Metrics}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|l|c|}
+\hline
+\textbf{Metric} & \textbf{Status} \\
+\hline
+Follows Cummings Methodology & $\checkmark$ \\
+Proper CDC Synchronization & $\checkmark$ \\
+All Outputs Registered & $\checkmark$ \\
+Modular Architecture & $\checkmark$ \\
+Comprehensive Documentation & $\checkmark$ \\
+Verified in Simulation & $\checkmark$ \\
+\hline
+\end{tabular}
+\end{table}
+
+\textbf{This design is production-ready!}
+
+%==============================================================================
+\appendix
+%==============================================================================
+
+\section{Quick Reference}
+
+\subsection{Gray Code Conversion Formulas}
+
+\begin{align}
+\text{Binary} \rightarrow \text{Gray:} \quad &G = (B \gg 1) \oplus B \\
+\text{Gray} \rightarrow \text{Binary:} \quad &B[i] = B[i+1] \oplus G[i]
+\end{align}
+
+\subsection{Full/Empty Conditions}
+
+\begin{align}
+\text{Empty:} \quad &rptr = wptr_{sync} \\
+\text{Full:} \quad &wptr = \{\neg rptr_{sync}[n:n-1], rptr_{sync}[n-2:0]\}
+\end{align}
+
+\subsection{Pointer Equations}
+
+\begin{align}
+wbin_{next} &= wbin + (winc \land \neg wfull) \\
+rbin_{next} &= rbin + (rinc \land \neg rempty) \\
+gray &= (bin \gg 1) \oplus bin
+\end{align}
+
+\section{References}
+
+\begin{thebibliography}{99}
+\bibitem{cummings2002}
+Clifford E. Cummings,
+\textit{Simulation and Synthesis Techniques for Asynchronous FIFO Design},
+SNUG 2002 (San Jose), March 2002.
+
+\bibitem{gray1953}
+Frank Gray,
+\textit{Pulse Code Communication},
+U.S. Patent 2,632,058, March 17, 1953.
+
+\bibitem{metastability}
+Ran Ginosar,
+\textit{Metastability and Synchronizers: A Tutorial},
+IEEE Design \& Test of Computers, 2011.
+\end{thebibliography}
+
+\end{document}
