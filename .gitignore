@@ -1,0 +1,30 @@
+# Simulation outputs
+*.vcd
+*.vvp
+*.fst
+*.shm
+*.log
+
+# Compiled files
+*.o
+*.a
+*.so
+
+# Waveform databases
+simv*
+csrc/
+
+# Coverage
+*.cov
+cov_work/
+
+# Synthesis outputs
+*.edf
+*.sdf
+*.ddc
+
+# Temporary files
+*~
+*.swp
+*.swo
+.DS_Store
