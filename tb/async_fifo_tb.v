@@ -158,11 +158,15 @@ module async_fifo_tb;
     task test_basic_write_read;
         integer i;
         begin
+            // Write data first
             for (i = 0; i < 5; i = i + 1) begin
                 write_single_word(8'hA0 + i);
-                repeat(2) @(posedge wclk);
-                read_single_word(8'hA0 + i);
-                repeat(2) @(posedge rclk);
+            end
+            // Wait for CDC synchronization (at least 3 read clock cycles)
+            repeat(10) @(posedge rclk);
+            // Now read the data
+            for (i = 0; i < 5; i = i + 1) begin
+                read_and_check();
             end
             $display("  Test 1 PASSED\n");
         end
@@ -175,7 +179,8 @@ module async_fifo_tb;
             for (i = 0; i < FIFO_DEPTH; i = i + 1) begin
                 write_single_word(i);
             end
-            @(posedge wclk);
+            // Wait for CDC synchronization
+            repeat(10) @(posedge wclk);
             if (!wfull) begin
                 $display("  ERROR: FIFO should be full!");
                 error_count = error_count + 1;
@@ -190,10 +195,12 @@ module async_fifo_tb;
     task test_empty_fifo;
         integer i;
         begin
+            // Wait for CDC synchronization before reading
+            repeat(10) @(posedge rclk);
             for (i = 0; i < FIFO_DEPTH; i = i + 1) begin
-                read_single_word(i);
+                read_and_check();
             end
-            @(posedge rclk);
+            repeat(5) @(posedge rclk);
             if (!rempty) begin
                 $display("  ERROR: FIFO should be empty!");
                 error_count = error_count + 1;
@@ -235,11 +242,12 @@ module async_fifo_tb;
             for (i = 0; i < 12; i = i + 1) begin
                 write_single_word(8'hC0 + i);
             end
-            repeat(5) @(posedge wclk);
+            // Wait for CDC synchronization
+            repeat(10) @(posedge rclk);
 
             // Burst read
             for (i = 0; i < 12; i = i + 1) begin
-                read_single_word(8'hC0 + i);
+                read_and_check();
             end
             $display("  Test 5 PASSED\n");
         end
@@ -291,16 +299,19 @@ module async_fifo_tb;
     // Read a single word with expected value
     task read_single_word;
         input [DSIZE-1:0] expected;
+        reg [DSIZE-1:0] read_val;
         begin
             @(posedge rclk);
             if (!rempty) begin
+                // Sample current data before incrementing pointer
+                read_val = rdata;
                 rinc = 1;
                 @(posedge rclk);
                 rinc = 0;
-                @(posedge rclk);
-                if (rdata !== expected) begin
+                // Check the data we sampled
+                if (read_val !== expected) begin
                     $display("  ERROR: Data mismatch! Expected: 0x%h, Got: 0x%h",
-                             expected, rdata);
+                             expected, read_val);
                     error_count = error_count + 1;
                 end
                 test_count = test_count + 1;
@@ -313,17 +324,20 @@ module async_fifo_tb;
     // Read and check against queue
     task read_and_check;
         reg [DSIZE-1:0] expected_val;
+        reg [DSIZE-1:0] read_val;
         begin
             @(posedge rclk);
             if (!rempty && write_data_queue.size() > 0) begin
                 expected_val = write_data_queue.pop_front();
+                // Sample current data before incrementing pointer
+                read_val = rdata;
                 rinc = 1;
                 @(posedge rclk);
                 rinc = 0;
-                @(posedge rclk);
-                if (rdata !== expected_val) begin
+                // Check the data we sampled
+                if (read_val !== expected_val) begin
                     $display("  ERROR: Data mismatch! Expected: 0x%h, Got: 0x%h",
-                             expected_val, rdata);
+                             expected_val, read_val);
                     error_count = error_count + 1;
                 end
                 test_count = test_count + 1;
